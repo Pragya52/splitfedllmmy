@@ -13,8 +13,8 @@ from src.utils.logger import setup_logger
 from src.models.llama_server import FederatedServer
 
 def main():
-    parser = argparse.ArgumentParser(description="FL-LLaMA Server")
-    parser.add_argument("--config", type=str, required=True, help="Path to config file")
+    parser = argparse.ArgumentParser(description="SplitFedLLM Server")
+    parser.add_argument("--config", type=str, default="configs/default_config.yaml", help="Config file")
     parser.add_argument("--port", type=int, default=8080, help="Server port")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use")
     
@@ -27,9 +27,8 @@ def main():
     
     logger.info(f"Starting server on port {args.port} with device {device}")
     
-    # Initialize server
-    # Note: In a real distributed setting, you would implement actual network communication
-    # For now, this is a placeholder for the server-side implementation
+    # Note: In a real distributed setting, implement actual network communication
+    print(f"Server would listen on port {args.port}")
     
     logger.info("Server setup completed")
 
