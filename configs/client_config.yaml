@@ -1,0 +1,16 @@
+# Client-specific configuration
+model:
+  vocab_size: 32000
+  hidden_size: 4096
+
+training:
+  batch_size: 2
+  learning_rate: 1e-4
+  max_seq_length: 512
+
+federated:
+  local_epochs: 1
+  server_address: "localhost"
+  server_port: 8080
+
+# Client doesn't need GaLore (server-only)
