@@ -1,0 +1,24 @@
+# Server-specific configuration
+model:
+  vocab_size: 32000
+  hidden_size: 4096
+  num_hidden_layers: 32
+
+training:
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  gradient_clipping: 1.0
+
+# GaLore settings (server-only)
+galore:
+  rank: 1024
+  update_proj_gap: 500
+  scale: 0.25
+
+knowledge_distillation:
+  temperature: 3.0
+  alpha: 0.5
+
+federated:
+  num_clients: 3
+  num_rounds: 10
