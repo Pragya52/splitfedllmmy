@@ -15,10 +15,11 @@ galore:
   update_proj_gap: 500
   scale: 0.25
 
-knowledge_distillation:
+kd:  # Changed from knowledge_distillation to kd
   temperature: 3.0
   alpha: 0.5
 
 federated:
   num_clients: 3
   num_rounds: 10
+

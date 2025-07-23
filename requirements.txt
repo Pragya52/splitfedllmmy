@@ -22,16 +22,3 @@ scikit-learn>=1.1.0
 tensorboard>=2.8.0
 wandb>=0.13.0
 
-# Standard Library (usually included but listing for completeness)
-logging
-argparse
-math
-warnings
-threading
-socket
-time
-pickle
-json
-os
-sys
-collections

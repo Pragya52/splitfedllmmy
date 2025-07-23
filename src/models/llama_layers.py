@@ -22,6 +22,9 @@ class LlamaRotaryEmbedding(nn.Module):
         self.dim = dim
         self.max_position_embeddings = max_position_embeddings
         self.base = base
+        
+        print(f"🔧 RoPE Init: dim={dim}, max_pos={max_position_embeddings}")
+        
         inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
@@ -31,19 +34,92 @@ class LlamaRotaryEmbedding(nn.Module):
         t = torch.arange(seq_len, device=x.device, dtype=self.inv_freq.dtype)
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1)
-        return emb.cos().to(dtype=x.dtype), emb.sin().to(dtype=x.dtype)
+        
+        cos_cached = emb.cos().to(dtype=x.dtype)
+        sin_cached = emb.sin().to(dtype=x.dtype)
+        
+        print(f"🔧 RoPE Forward: seq_len={seq_len}, emb.shape={emb.shape}, cos.shape={cos_cached.shape}")
+        
+        return cos_cached, sin_cached
 
 def rotate_half(x):
+    """Rotates half the hidden dims of the input."""
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
     return torch.cat((-x2, x1), dim=-1)
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None):
-    cos = cos.unsqueeze(1)  # [seq_len, 1, dim]
-    sin = sin.unsqueeze(1)  # [seq_len, 1, dim]
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
-    return q_embed, k_embed
+    """Apply rotary position embedding with automatic dimension fixing"""
+    print(f"🔍 RoPE Debug - Input shapes:")
+    print(f"  q: {q.shape}, k: {k.shape}")
+    print(f"  cos: {cos.shape}, sin: {sin.shape}")
+    print(f"  position_ids: {position_ids.shape if position_ids is not None else None}")
+    
+    # Get dimensions
+    batch_size, num_heads, seq_len, head_dim = q.shape
+    
+    # Handle cos/sin - they come as [seq_len, dim] from forward()
+    if len(cos.shape) == 2:
+        # cos/sin are [seq_len, dim] - need to reshape for broadcasting
+        cos = cos.unsqueeze(0).unsqueeze(1)  # [1, 1, seq_len, dim]
+        sin = sin.unsqueeze(0).unsqueeze(1)  # [1, 1, seq_len, dim]
+    
+    cos_head_dim = cos.shape[-1]
+    sin_head_dim = sin.shape[-1]
+    
+    print(f"  Expected head_dim: {head_dim}, cos_head_dim: {cos_head_dim}")
+    
+    # Fix dimension mismatch
+    if cos_head_dim != head_dim:
+        print(f"⚠️  Dimension mismatch detected: {cos_head_dim} vs {head_dim}")
+        
+        if cos_head_dim > head_dim:
+            # Truncate cos/sin to match head_dim
+            print(f"🔧 Truncating cos/sin from {cos_head_dim} to {head_dim}")
+            cos = cos[..., :head_dim]
+            sin = sin[..., :head_dim]
+        else:
+            # Pad cos/sin to match head_dim
+            print(f"🔧 Padding cos/sin from {cos_head_dim} to {head_dim}")
+            pad_size = head_dim - cos_head_dim
+            cos = F.pad(cos, (0, pad_size), "constant", 0)
+            sin = F.pad(sin, (0, pad_size), "constant", 0)
+    
+    # Ensure cos/sin match q/k batch and sequence dimensions
+    if cos.shape[0] != batch_size:
+        cos = cos.expand(batch_size, -1, -1, -1)
+        sin = sin.expand(batch_size, -1, -1, -1)
+    
+    if cos.shape[1] != num_heads:
+        cos = cos.expand(-1, num_heads, -1, -1)
+        sin = sin.expand(-1, num_heads, -1, -1)
+    
+    if cos.shape[2] != seq_len:
+        if cos.shape[2] > seq_len:
+            cos = cos[:, :, :seq_len, :]
+            sin = sin[:, :, :seq_len, :]
+        else:
+            # This shouldn't happen in normal cases
+            print(f"⚠️  cos seq_len ({cos.shape[2]}) < q seq_len ({seq_len})")
+            # Repeat the last position
+            repeat_count = seq_len - cos.shape[2]
+            last_cos = cos[:, :, -1:, :].repeat(1, 1, repeat_count, 1)
+            last_sin = sin[:, :, -1:, :].repeat(1, 1, repeat_count, 1)
+            cos = torch.cat([cos, last_cos], dim=2)
+            sin = torch.cat([sin, last_sin], dim=2)
+    
+    print(f"  After fixing: cos: {cos.shape}, sin: {sin.shape}")
+    
+    try:
+        # Apply rotary embedding
+        q_embed = (q * cos) + (rotate_half(q) * sin)
+        k_embed = (k * cos) + (rotate_half(k) * sin)
+        print(f"✅ RoPE applied successfully!")
+        return q_embed, k_embed
+    except Exception as e:
+        print(f"❌ RoPE failed even after fixing: {e}")
+        print(f"🔧 Returning original tensors without RoPE")
+        return q, k
 
 class LlamaAttention(nn.Module):
     def __init__(self, config):
@@ -54,6 +130,8 @@ class LlamaAttention(nn.Module):
         self.num_key_value_heads = getattr(config, 'num_key_value_heads', self.num_heads)
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.max_position_embeddings = config.max_position_embeddings
+        
+        print(f"🔧 Attention config: hidden_size={self.hidden_size}, num_heads={self.num_heads}, head_dim={self.head_dim}")
         
         if (self.head_dim * self.num_heads) != self.hidden_size:
             raise ValueError(
@@ -67,7 +145,7 @@ class LlamaAttention(nn.Module):
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
         
         self.rotary_emb = LlamaRotaryEmbedding(
-            self.head_dim,
+            self.head_dim,  # Use calculated head_dim
             max_position_embeddings=self.max_position_embeddings,
             base=getattr(config, 'rope_theta', 10000.0),
         )

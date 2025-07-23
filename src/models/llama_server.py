@@ -58,8 +58,14 @@ class FederatedServer:
         """Convert ModelConfig to LlamaConfig-like object"""
         class LlamaConfigLike:
             def __init__(self, model_config):
-                for key, value in asdict(model_config).items():
-                    setattr(self, key, value)
+                if isinstance(model_config, dict):
+                    # Handle dictionary (from YAML)
+                    for key, value in model_config.items():
+                        setattr(self, key, value)
+                else:
+                    # Handle dataclass (from Python)
+                    for key, value in model_config.__dict__.items():
+                        setattr(self, key, value)
         
         return LlamaConfigLike(model_config)
     
@@ -75,28 +81,20 @@ class FederatedServer:
         self.layers_31_32_copy.train()
         self.lm_head_copy.train()
         
-        # Store original hidden states for ensemble
-        if not hasattr(self, 'batch_hidden_states'):
-            self.batch_hidden_states = []
-            self.batch_attention_masks = []
-            self.batch_position_ids = []
-        
-        self.batch_hidden_states.append(hidden_states)
-        self.batch_attention_masks.append(attention_mask)
-        self.batch_position_ids.append(position_ids)
-        
-        # Individual processing through layers 3-30
+        # Process each client's data individually (don't batch across clients)
         with torch.no_grad():
             processed_states = self.layers_3_30(hidden_states, attention_mask, position_ids)
         
-        # Generate soft targets using ensemble approach
-        soft_targets = self._generate_ensemble_soft_targets()
+        # Generate soft targets for this specific client's batch size
+        ensemble_middle = self.layers_3_30(hidden_states, attention_mask, position_ids)
+        ensemble_final = self.layers_31_32_copy(ensemble_middle, attention_mask, position_ids)
+        teacher_logits = self.lm_head_copy(ensemble_final)
         
-        # Extract soft targets for this client
-        batch_size = hidden_states.shape[0]
-        client_soft_targets = soft_targets[client_id * batch_size:(client_id + 1) * batch_size]
+        # Generate soft targets
+        temperature = self.config.kd.temperature
+        soft_targets = F.softmax(teacher_logits / temperature, dim=-1)
         
-        return processed_states.detach(), client_soft_targets.detach()
+        return processed_states.detach(), soft_targets.detach()
     
     def _generate_ensemble_soft_targets(self):
         """Generate soft targets using ensemble of all client hidden states"""

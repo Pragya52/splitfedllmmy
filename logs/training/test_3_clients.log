@@ -1,0 +1,24 @@
+2025-07-18 03:29:45,404 - __main__ - INFO - Loaded configuration from configs/three_client_config.yaml
+2025-07-18 03:29:45,405 - __main__ - INFO - Configuration loaded for 3 clients
+2025-07-18 03:29:45,460 - __main__ - INFO - Using device: cuda
+2025-07-18 03:29:45,547 - __main__ - INFO - CUDA device: NVIDIA RTX A6000
+2025-07-18 03:29:45,547 - __main__ - INFO - CUDA memory: 51.0 GB
+2025-07-18 03:29:45,547 - __main__ - WARNING - Could not initialize enhanced metrics tracker: No module named 'src.utils.enhanced_metrics'
+2025-07-18 03:29:45,548 - __main__ - INFO - Falling back to basic metrics tracking
+2025-07-18 03:29:46,244 - __main__ - INFO - Initializing communication manager...
+2025-07-18 03:29:46,245 - __main__ - INFO - Starting federated training with 3 clients...
+2025-07-18 03:29:46,245 - __main__ - INFO - Training for 5 rounds
+2025-07-18 03:53:35,309 - __main__ - WARNING - Could not save plots: '#1f77b4-o' is not a valid format string (unrecognized character '#')
+2025-07-18 09:19:06,419 - __main__ - INFO - Loaded configuration from configs/three_client_config.yaml
+2025-07-18 09:19:06,419 - __main__ - INFO - Configuration loaded for 3 clients
+2025-07-18 09:19:06,535 - __main__ - INFO - Using device: cuda
+2025-07-18 09:19:06,635 - __main__ - INFO - CUDA device: NVIDIA RTX A6000
+2025-07-18 09:19:06,636 - __main__ - INFO - CUDA memory: 51.0 GB
+2025-07-18 09:19:06,636 - __main__ - WARNING - Enhanced metrics not available: No module named 'src.utils.enhanced_metrics'
+2025-07-18 09:19:06,636 - __main__ - INFO - Falling back to basic metrics tracking
+2025-07-18 09:19:07,711 - __main__ - INFO - Basic metrics tracker initialized
+2025-07-18 09:19:07,711 - __main__ - INFO - Initializing communication manager...
+2025-07-18 09:19:07,711 - __main__ - INFO - Starting federated training with 3 clients...
+2025-07-18 09:19:07,711 - __main__ - INFO - Training for 5 rounds
+2025-07-18 09:38:02,961 - __main__ - INFO - Generating plots with individual client curves...
+2025-07-18 09:38:04,259 - __main__ - INFO - Training plots with individual client curves saved to logs/training/test_3_clients_plots.png

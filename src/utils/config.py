@@ -66,8 +66,27 @@ class Config:
     kd: KnowledgeDistillationConfig = KnowledgeDistillationConfig()
     
     @classmethod
+    @classmethod
     def from_yaml(cls, path: str):
-        with open(path, 'r') as f:
-            data = yaml.safe_load(f)
-        return cls(**data)
-      
+      with open(path, 'r') as f:
+         data = yaml.safe_load(f)
+    
+      # Ensure numeric types are correct
+      model_data = data.get('model', {})
+      training_data = data.get('training', {})
+    
+      # Convert string numbers to proper types
+      if 'learning_rate' in training_data:
+        training_data['learning_rate'] = float(training_data['learning_rate'])
+      if 'vocab_size' in model_data:
+        model_data['vocab_size'] = int(model_data['vocab_size'])
+      if 'hidden_size' in model_data:
+        model_data['hidden_size'] = int(model_data['hidden_size'])
+    
+      return cls(
+        model=ModelConfig(**model_data),
+        training=TrainingConfig(**training_data),
+        galore=GaLoreConfig(**data.get('galore', {})),
+        federated=FederatedConfig(**data.get('federated', {})),
+        kd=KnowledgeDistillationConfig(**data.get('kd', {}))
+      )

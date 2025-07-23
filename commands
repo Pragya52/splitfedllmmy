@@ -1,0 +1,7 @@
+Commands to run -
+
+1. pip install -r requirements.txt
+2. CUDA_VISIBLE_DEVICES=0 python scripts/run_federated.py \
+    --config configs/safe_config.yaml \
+    --experiment_name fixed_circular_import \
+    --save_plots

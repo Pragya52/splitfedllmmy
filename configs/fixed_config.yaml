@@ -1,0 +1,42 @@
+federated:
+  client_fraction: 1.0
+  local_epochs: 1
+  num_clients: 2
+  num_rounds: 2
+  server_address: localhost
+  server_port: 8080
+galore:
+  rank: 64
+  scale: 0.25
+  target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+  update_proj_gap: 50
+kd:
+  alpha: 0.5
+  temperature: 3.0
+model:
+  attention_dropout: 0.0
+  hidden_size: 4096
+  intermediate_size: 11008
+  max_position_embeddings: 2048
+  model_name: llama-7b
+  num_attention_heads: 32
+  num_hidden_layers: 32
+  num_key_value_heads: 32
+  rms_norm_eps: 1.0e-06
+  rope_theta: 10000.0
+  vocab_size: 50257
+training:
+  batch_size: 1
+  gradient_clipping: 1.0
+  learning_rate: 0.0001
+  max_seq_length: 256
+  num_epochs: 1
+  warmup_steps: 100
+  weight_decay: 0.01

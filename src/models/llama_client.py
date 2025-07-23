@@ -60,13 +60,19 @@ class FederatedClient:
         self.round_losses = []
         
     def _convert_to_llama_config(self, model_config):
-        """Convert ModelConfig to LlamaConfig-like object"""
-        class LlamaConfigLike:
-            def __init__(self, model_config):
-                for key, value in asdict(model_config).items():
+     """Convert ModelConfig to LlamaConfig-like object"""
+     class LlamaConfigLike:
+        def __init__(self, model_config):
+            if isinstance(model_config, dict):
+                # Handle dictionary (from YAML)
+                for key, value in model_config.items():
                     setattr(self, key, value)
-        
-        return LlamaConfigLike(model_config)
+            else:
+                # Handle dataclass (from Python)
+                for key, value in model_config.__dict__.items():
+                    setattr(self, key, value)
+    
+     return LlamaConfigLike(model_config)
     
     def forward_initial_layers(self, input_ids, attention_mask, position_ids=None):
         """Forward pass through initial layers (embedding + layers 1-2)"""
