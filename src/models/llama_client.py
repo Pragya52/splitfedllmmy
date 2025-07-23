@@ -1,5 +1,3 @@
-# Modified version of your FederatedClient class with quantization integration
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,7 +7,7 @@ import logging
 
 from .llama_layers import LlamaLayerRange
 from ..data.medical_dataset import MedicalQADataset
-from .quantization import QuantizedCommunication  # Import our quantization module
+from .quantization import QuantizedCommunication
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +30,7 @@ class FederatedClient:
         self.lm_head = nn.Linear(config.model.hidden_size, config.model.vocab_size, bias=False)
         
         # ✅ NEW: Initialize quantized communication
-        quantization_k = getattr(config, 'quantization_k', 10.0)  # Allow config override
+        quantization_k = getattr(config.quantization, 'k', 10.0) if hasattr(config, 'quantization') else 10.0
         self.quantizer = QuantizedCommunication(k=quantization_k, auto_calibrate=True)
         
         # Move to device
@@ -51,7 +49,7 @@ class FederatedClient:
             {'params': self.quantizer.parameters()}  # ✅ NEW: Optimize quantization scales
         ], lr=config.training.learning_rate, weight_decay=config.training.weight_decay)
         
-        # Dataset (unchanged)
+        # Dataset
         self.dataset = MedicalQADataset(
             tokenizer, 
             max_length=config.training.max_seq_length,
@@ -121,25 +119,38 @@ class FederatedClient:
                 # Step 1: Forward through initial layers
                 hidden_states = self.forward_initial_layers(input_ids, attention_mask, position_ids)
                 
-                # ✅ NEW: Step 2: Quantize hidden states before sending to server
-                original_hidden_states = hidden_states.detach().clone()  # For MSE calculation
-                quantized_hidden_states = self.quantizer.quantize_client_to_server(hidden_states)
+                # ✅ NEW: Check if quantization is enabled
+                quantization_enabled = getattr(self.config, 'quantization', None) and getattr(self.config.quantization, 'enabled', False)
                 
-                # ✅ NEW: Calculate quantization error for monitoring
-                quantization_mse = F.mse_loss(original_hidden_states, quantized_hidden_states.detach())
-                total_quantization_mse += quantization_mse.item()
+                if quantization_enabled:
+                    # Step 2: Quantize hidden states before sending to server
+                    original_hidden_states = hidden_states.detach().clone()  # For MSE calculation
+                    quantized_hidden_states = self.quantizer.quantize_client_to_server(hidden_states)
+                    
+                    # Calculate quantization error for monitoring
+                    quantization_mse = F.mse_loss(original_hidden_states, quantized_hidden_states.detach())
+                    total_quantization_mse += quantization_mse.item()
+                    
+                    # Step 3: Send quantized data to server
+                    try:
+                        processed_states, soft_targets = server_manager.process_quantized_hidden_states(
+                            self.client_id, quantized_hidden_states, attention_mask, position_ids
+                        )
+                    except Exception as e:
+                        logger.error(f"Client {self.client_id}: Server communication error: {e}")
+                        continue
+                else:
+                    # Standard non-quantized communication
+                    try:
+                        processed_states, soft_targets = server_manager.process_hidden_states(
+                            self.client_id, hidden_states, attention_mask, position_ids
+                        )
+                        quantization_mse = torch.tensor(0.0)  # No quantization error
+                    except Exception as e:
+                        logger.error(f"Client {self.client_id}: Server communication error: {e}")
+                        continue
                 
-                # Step 3: Send quantized data to server and get quantized processed states + soft targets
-                try:
-                    # ✅ MODIFIED: Use new method name for quantized communication
-                    processed_states, soft_targets = server_manager.process_quantized_hidden_states(
-                        self.client_id, quantized_hidden_states, attention_mask, position_ids
-                    )
-                except Exception as e:
-                    logger.error(f"Client {self.client_id}: Server communication error: {e}")
-                    continue
-                
-                # Step 4: Forward through final layers (processed_states are already quantized by server)
+                # Step 4: Forward through final layers
                 student_logits = self.forward_final_layers(processed_states, attention_mask, position_ids)
                 
                 # Step 5: Compute losses
@@ -183,12 +194,19 @@ class FederatedClient:
                 
                 # ✅ MODIFIED: Enhanced logging with quantization info
                 if batch_idx % 10 == 0:
-                    logger.info(
-                        f"Client {self.client_id}, Epoch {epoch}, Batch {batch_idx}: "
-                        f"Task Loss: {task_loss.item():.4f}, KD Loss: {kd_loss.item():.4f}, "
-                        f"Total Loss: {total_loss_batch.item():.4f}, "
-                        f"Quantization MSE: {quantization_mse.item():.6f}"  # ✅ NEW
-                    )
+                    if quantization_enabled:
+                        logger.info(
+                            f"Client {self.client_id}, Epoch {epoch}, Batch {batch_idx}: "
+                            f"Task Loss: {task_loss.item():.4f}, KD Loss: {kd_loss.item():.4f}, "
+                            f"Total Loss: {total_loss_batch.item():.4f}, "
+                            f"Quantization MSE: {quantization_mse.item():.6f}"
+                        )
+                    else:
+                        logger.info(
+                            f"Client {self.client_id}, Epoch {epoch}, Batch {batch_idx}: "
+                            f"Task Loss: {task_loss.item():.4f}, KD Loss: {kd_loss.item():.4f}, "
+                            f"Total Loss: {total_loss_batch.item():.4f}"
+                        )
         
         avg_loss = total_loss / max(num_batches, 1)
         avg_quantization_mse = total_quantization_mse / max(num_batches, 1)
@@ -196,10 +214,15 @@ class FederatedClient:
         self.round_losses.append(avg_loss)
         self.quantization_mse.append(avg_quantization_mse)  # ✅ NEW: Store quantization metrics
         
-        logger.info(
-            f"Client {self.client_id} finished training round with average loss: {avg_loss:.4f}, "
-            f"average quantization MSE: {avg_quantization_mse:.6f}"
-        )
+        quantization_enabled = getattr(self.config, 'quantization', None) and getattr(self.config.quantization, 'enabled', False)
+        
+        if quantization_enabled:
+            logger.info(
+                f"Client {self.client_id} finished training round with average loss: {avg_loss:.4f}, "
+                f"average quantization MSE: {avg_quantization_mse:.6f}"
+            )
+        else:
+            logger.info(f"Client {self.client_id} finished training round with average loss: {avg_loss:.4f}")
         
         return avg_loss
     
@@ -210,7 +233,12 @@ class FederatedClient:
         params['layers_1_2'] = {k: v.cpu().clone() for k, v in self.layers_1_2.state_dict().items()}
         params['layers_31_32'] = {k: v.cpu().clone() for k, v in self.layers_31_32.state_dict().items()}
         params['lm_head'] = {k: v.cpu().clone() for k, v in self.lm_head.state_dict().items()}
-        params['quantizer'] = {k: v.cpu().clone() for k, v in self.quantizer.state_dict().items()}  # ✅ NEW
+        
+        # ✅ NEW: Include quantizer parameters if quantization is enabled
+        quantization_enabled = getattr(self.config, 'quantization', None) and getattr(self.config.quantization, 'enabled', False)
+        if quantization_enabled:
+            params['quantizer'] = {k: v.cpu().clone() for k, v in self.quantizer.state_dict().items()}
+        
         return params
     
     def set_parameters(self, parameters):
@@ -229,7 +257,16 @@ class FederatedClient:
     # ✅ NEW: Method to get quantization statistics
     def get_quantization_stats(self):
         """Get quantization statistics for analysis"""
+        quantization_enabled = getattr(self.config, 'quantization', None) and getattr(self.config.quantization, 'enabled', False)
+        
+        if not quantization_enabled:
+            return {
+                'quantization_enabled': False,
+                'avg_quantization_mse': 0.0,
+            }
+        
         return {
+            'quantization_enabled': True,
             'avg_quantization_mse': sum(self.quantization_mse) / len(self.quantization_mse) if self.quantization_mse else 0,
             'client_to_server_scale': self.quantizer.client_to_server_quantizer.scale.item(),
             'client_to_server_zero_point': self.quantizer.client_to_server_quantizer.zero_point.item(),
