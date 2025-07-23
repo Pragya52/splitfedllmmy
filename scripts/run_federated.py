@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Main script to run federated training with enhanced metrics for multiple clients"""
+"""Updated main script to run quantized federated training with enhanced metrics"""
 
 import argparse
 import sys
@@ -12,86 +12,36 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from src.utils.config import Config
 from src.utils.logger import setup_logger
-from src.communication.communication_manager import CommunicationManager
+from src.communication.communication_manager import QuantizedCommunicationManager
 
-def create_sample_config():
-    """Create a sample configuration with RoPE-compatible dimensions for 3 clients"""
-    from src.utils.config import (ModelConfig, TrainingConfig, GaLoreConfig, 
-                                 FederatedConfig, KnowledgeDistillationConfig, Config)
+def create_quantized_sample_config():
+    """Create a sample configuration optimized for quantized federated learning"""
     
-    # Use dimensions that guarantee clean division for RoPE
-    # hidden_size must be divisible by num_attention_heads
-    # Result: 128/4 = 32 head_dim (clean division)
-    config = Config(
-        model=ModelConfig(
-            model_name="llama-7b",
-            vocab_size=50257,  # Match DialoGPT tokenizer
-            hidden_size=128,   # 128/4 = 32 head_dim ✅
-            intermediate_size=256,  # 2x hidden_size
-            num_hidden_layers=2,    # Minimal layers for testing
-            num_attention_heads=4,  # Clean division with hidden_size
-            num_key_value_heads=4,  # Same as attention heads
-            max_position_embeddings=128,  # Match max_seq_length
-            rms_norm_eps=1e-6,
-            rope_theta=10000.0,
-            attention_dropout=0.0
-        ),
-        training=TrainingConfig(
-            batch_size=1,  # Start with batch_size=1
-            learning_rate=1e-4,
-            num_epochs=1,
-            max_seq_length=64,  # Small sequence length
-            warmup_steps=10,
-            weight_decay=0.01,
-            gradient_clipping=1.0
-        ),
-        galore=GaLoreConfig(
-            rank=16,  # Small rank for testing
-            update_proj_gap=5,
-            scale=0.25,
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-        ),
-        federated=FederatedConfig(
-            num_clients=3,  # CHANGED TO 3 CLIENTS
-            num_rounds=5,   # 5 rounds for testing
-            client_fraction=1.0,
-            local_epochs=1,
-            server_address="localhost",
-            server_port=8080
-        ),
-        kd=KnowledgeDistillationConfig(
-            temperature=3.0,
-            alpha=0.5
-        )
-    )
+    # Use the new quantized config creation method
+    config = Config.create_quantized_config(num_clients=3, quantization_k=10.0)
     
-    # Verify configuration compatibility
-    head_dim = config.model.hidden_size // config.model.num_attention_heads
-    print(f"📊 Config verification for {config.federated.num_clients} clients:")
-    print(f"  hidden_size: {config.model.hidden_size}")
-    print(f"  num_attention_heads: {config.model.num_attention_heads}")
-    print(f"  head_dim: {head_dim}")
-    print(f"  max_seq_length: {config.training.max_seq_length}")
-    print(f"  vocab_size: {config.model.vocab_size}")
-    print(f"  num_clients: {config.federated.num_clients}")
+    print(f"📊 Quantized FL-LLaMA Config Summary:")
+    print(f"  Model: {config.model.model_name} ({config.model.hidden_size}d, {config.model.num_hidden_layers} layers)")
+    print(f"  Clients: {config.federated.num_clients}")
+    print(f"  Rounds: {config.federated.num_rounds}")
+    print(f"  Quantization: {'Enabled' if config.quantization.enabled else 'Disabled'}")
+    print(f"  Quantization K: {config.quantization.k}")
+    print(f"  Learnable Scales: {config.quantization.learnable_scale}")
+    print(f"  Privacy Noise: {config.quantization.privacy_noise_std}")
     
-    # Ensure clean division
-    assert config.model.hidden_size % config.model.num_attention_heads == 0, \
-        f"hidden_size ({config.model.hidden_size}) must be divisible by num_attention_heads ({config.model.num_attention_heads})"
-    
-    # Ensure reasonable head dimension for RoPE
-    assert head_dim >= 8, f"head_dim ({head_dim}) should be at least 8 for proper RoPE functionality"
-    
-    print(f"✅ Configuration validated successfully!")
     return config
 
 def main():
-    parser = argparse.ArgumentParser(description="FL-LLaMA Federated Training with Enhanced Metrics")
+    parser = argparse.ArgumentParser(description="Quantized FL-LLaMA Federated Training")
     parser.add_argument("--config", type=str, help="Path to config file")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use")
     parser.add_argument("--log_level", type=str, default="INFO", help="Logging level")
-    parser.add_argument("--experiment_name", type=str, default="fl_llama_3clients", help="Experiment name")
+    parser.add_argument("--experiment_name", type=str, default="quantized_fl_llama", help="Experiment name")
     parser.add_argument("--save_plots", action="store_true", help="Save training plots")
+    parser.add_argument("--disable_quantization", action="store_true", help="Disable quantization for comparison")
+    parser.add_argument("--quantization_k", type=float, default=10.0, help="Quantization sharpness parameter")
+    parser.add_argument("--privacy_noise", type=float, default=0.01, help="Privacy noise standard deviation")
+    parser.add_argument("--compare_modes", action="store_true", help="Compare quantized vs standard training")
     
     args = parser.parse_args()
     
@@ -109,13 +59,31 @@ def main():
             config = Config.from_yaml(args.config)
             logger.info(f"Loaded configuration from {args.config}")
             logger.info(f"Configuration loaded for {config.federated.num_clients} clients")
+            
+            # Override quantization settings from command line
+            if args.disable_quantization:
+                config.quantization.enabled = False
+                logger.info("Quantization disabled via command line")
+            else:
+                config.quantization.k = args.quantization_k
+                config.quantization.privacy_noise_std = args.privacy_noise
+                logger.info(f"Quantization settings: k={args.quantization_k}, noise_std={args.privacy_noise}")
+                
         except Exception as e:
             logger.warning(f"Failed to load config from {args.config}: {e}")
-            logger.info("Falling back to sample configuration")
-            config = create_sample_config()
+            logger.info("Falling back to sample quantized configuration")
+            config = create_quantized_sample_config()
     else:
-        logger.info("No config file provided, using sample configuration for 3 clients")
-        config = create_sample_config()
+        logger.info("No config file provided, using sample quantized configuration")
+        config = create_quantized_sample_config()
+        
+        # Apply command line overrides
+        if args.disable_quantization:
+            config.quantization.enabled = False
+            logger.info("Quantization disabled via command line")
+        else:
+            config.quantization.k = args.quantization_k
+            config.quantization.privacy_noise_std = args.privacy_noise
     
     # Setup device
     if args.device == 'cuda' and not torch.cuda.is_available():
@@ -131,85 +99,180 @@ def main():
         logger.info(f"CUDA device: {torch.cuda.get_device_name()}")
         logger.info(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     
-    # Initialize ENHANCED metrics tracker
+    # Log quantization status
+    if config.quantization.enabled:
+        logger.info("🔢 QUANTIZED FEDERATED LEARNING ENABLED")
+        logger.info(f"   Quantization method: INT4 with sigmoid-based differentiable quantization")
+        logger.info(f"   Sharpness parameter (k): {config.quantization.k}")
+        logger.info(f"   Learnable scales: {config.quantization.learnable_scale}")
+        logger.info(f"   Auto calibration: {config.quantization.auto_calibrate}")
+        logger.info(f"   Privacy noise std: {config.quantization.privacy_noise_std}")
+    else:
+        logger.info("📊 STANDARD FEDERATED LEARNING (No Quantization)")
+    
+    # Initialize enhanced metrics tracker
     try:
-        from src.utils.enhanced_metrics import TrainingMetrics
-        metrics = TrainingMetrics()
-        logger.info("Enhanced metrics tracker initialized successfully")
+        from src.utils.enhanced_metrics import QuantizedTrainingMetrics
+        metrics = QuantizedTrainingMetrics(track_quantization=config.quantization.enabled)
+        logger.info("Enhanced quantized metrics tracker initialized successfully")
     except ImportError as e:
-        logger.warning(f"Enhanced metrics not available: {e}")
-        logger.info("Falling back to basic metrics tracking")
-        # Try basic metrics as fallback
+        logger.warning(f"Enhanced quantized metrics not available: {e}")
         try:
-            from src.utils.metrics import TrainingMetrics
+            from src.utils.enhanced_metrics import TrainingMetrics
             metrics = TrainingMetrics()
             logger.info("Basic metrics tracker initialized")
         except ImportError as e2:
             logger.warning(f"No metrics tracker available: {e2}")
-            logger.info("Continuing without metrics tracking")
             metrics = None
-    
+
     try:
-        # Run federated training
+        # Initialize communication manager
         logger.info("Initializing communication manager...")
-        comm_manager = CommunicationManager(config)
+        comm_manager = QuantizedCommunicationManager(config)
         
-        logger.info(f"Starting federated training with {config.federated.num_clients} clients...")
-        logger.info(f"Training for {config.federated.num_rounds} rounds")
-        
-        results = comm_manager.run_federated_training(device)
-        
-        # Update metrics if available
-        if metrics:
-            for result in results:
-                metrics.update_round_metrics(result)
+        # Run training based on mode
+        if args.compare_modes:
+            logger.info("Running comparison between quantized and standard training...")
+            results = comm_manager.compare_quantized_vs_standard(device)
             
-            # Print detailed summary with individual client performance
-            if hasattr(metrics, 'print_detailed_summary'):
+            # Process comparison results
+            if metrics and isinstance(results, dict):
+                # Process both sets of results
+                for mode, mode_results in results.items():
+                    logger.info(f"Processing {mode} results for metrics...")
+                    for result in mode_results:
+                        if hasattr(metrics, 'update_round_metrics'):
+                            metrics.update_round_metrics(result, mode_prefix=mode)
+            
+        else:
+            # Run single mode training
+            logger.info(f"Starting {'quantized' if config.quantization.enabled else 'standard'} federated training...")
+            logger.info(f"Training configuration:")
+            logger.info(f"  Clients: {config.federated.num_clients}")
+            logger.info(f"  Rounds: {config.federated.num_rounds}")
+            logger.info(f"  Local epochs per round: {config.federated.local_epochs}")
+            logger.info(f"  Batch size: {config.training.batch_size}")
+            logger.info(f"  Learning rate: {config.training.learning_rate}")
+            
+            # Run federated training
+            if config.quantization.enabled:
+                results = comm_manager.run_quantized_federated_training(device)
+            else:
+                results = comm_manager.run_standard_federated_training(device)
+        
+        # Process results and update metrics
+        if metrics and not args.compare_modes:
+            for result in results:
+                if hasattr(metrics, 'update_round_metrics'):
+                    metrics.update_round_metrics(result)
+                
+                # Update quantization metrics if available
+                if config.quantization.enabled and 'server_quantization_mse' in result:
+                    if hasattr(metrics, 'update_quantization_metrics'):
+                        metrics.update_quantization_metrics(
+                            server_mse=result['server_quantization_mse'],
+                            client_stats=result.get('client_quantization_stats', [])
+                        )
+            
+            # Print detailed summary
+            if hasattr(metrics, 'print_quantized_summary') and config.quantization.enabled:
+                metrics.print_quantized_summary()
+            elif hasattr(metrics, 'print_detailed_summary'):
                 metrics.print_detailed_summary()
             else:
-                # Fallback summary for basic metrics
-                summary = metrics.get_summary()
+                # Fallback summary
+                summary = metrics.get_summary() if hasattr(metrics, 'get_summary') else "No summary available"
                 logger.info("Training completed successfully!")
                 logger.info(f"Training Summary: {summary}")
             
-            # Save plots with individual client curves
+            # Save plots
             if args.save_plots:
                 try:
                     plot_path = f"logs/training/{args.experiment_name}_plots.png"
-                    if hasattr(metrics, 'plot_training_curves'):
-                        # Enhanced metrics with individual client support
+                    
+                    if hasattr(metrics, 'plot_quantized_training_curves') and config.quantization.enabled:
+                        logger.info("Generating quantized training plots...")
+                        metrics.plot_quantized_training_curves(plot_path, show_individual_clients=True)
+                        logger.info(f"Quantized training plots saved to {plot_path}")
+                    elif hasattr(metrics, 'plot_training_curves'):
+                        logger.info("Generating training plots...")
                         if 'show_individual_clients' in metrics.plot_training_curves.__code__.co_varnames:
-                            logger.info("Generating plots with individual client curves...")
                             metrics.plot_training_curves(plot_path, show_individual_clients=True)
-                            logger.info(f"Training plots with individual client curves saved to {plot_path}")
                         else:
-                            logger.info("Generating basic plots...")
                             metrics.plot_training_curves(plot_path)
-                            logger.info(f"Training plots saved to {plot_path}")
+                        logger.info(f"Training plots saved to {plot_path}")
                     else:
                         logger.warning("Plotting not available with current metrics class")
+                        
                 except Exception as e:
                     logger.error(f"Could not save plots: {e}")
-                    logger.info("Continuing without plots...")
-        else:
-            # Fallback: manually print client information
-            logger.info("Training completed successfully!")
-            logger.info(f"Total rounds completed: {len(results)}")
-            
-            for i, result in enumerate(results):
-                avg_loss = result.get('avg_client_loss', 'N/A')
-                client_losses = result.get('client_losses', [])
-                server_loss = result.get('server_losses', 'N/A')
+        
+        # Manual result processing without metrics (fallback)
+        if not metrics:
+            if args.compare_modes:
+                logger.info("Comparison completed successfully!")
+                if isinstance(results, dict):
+                    for mode, mode_results in results.items():
+                        logger.info(f"{mode.capitalize()} mode: {len(mode_results)} rounds completed")
+                        if mode_results:
+                            final_loss = mode_results[-1].get('avg_client_loss', 'N/A')
+                            logger.info(f"  Final loss: {final_loss}")
+            else:
+                logger.info("Training completed successfully!")
+                logger.info(f"Total rounds completed: {len(results)}")
                 
-                logger.info(f"Round {i}: Avg Loss: {avg_loss:.4f}, Client Losses: {client_losses}, Server Loss: {server_loss}")
+                # Print round-by-round results
+                for i, result in enumerate(results):
+                    avg_loss = result.get('avg_client_loss', 'N/A')
+                    client_losses = result.get('client_losses', [])
+                    
+                    log_msg = f"Round {i+1}: Avg Loss: {avg_loss:.4f}, Client Losses: {client_losses}"
+                    
+                    # Add quantization info if available
+                    if config.quantization.enabled and 'server_quantization_mse' in result:
+                        server_mse = result['server_quantization_mse']
+                        log_msg += f", Server Quantization MSE: {server_mse:.6f}"
+                    
+                    logger.info(log_msg)
+                
+                # Calculate improvement
+                if len(results) >= 2:
+                    initial_loss = results[0].get('avg_client_loss', 0)
+                    final_loss = results[-1].get('avg_client_loss', 0)
+                    improvement = ((initial_loss - final_loss) / initial_loss) * 100 if initial_loss > 0 else 0
+                    logger.info(f"Overall improvement: {improvement:.1f}% ({initial_loss:.4f} → {final_loss:.4f})")
+        
+        # Log quantization summary if enabled
+        if config.quantization.enabled and not args.compare_modes and results:
+            logger.info("\n" + "="*50)
+            logger.info("QUANTIZATION PERFORMANCE SUMMARY")
+            logger.info("="*50)
             
-            # Calculate improvement
-            if len(results) >= 2:
-                initial_loss = results[0].get('avg_client_loss', 0)
-                final_loss = results[-1].get('avg_client_loss', 0)
-                improvement = ((initial_loss - final_loss) / initial_loss) * 100 if initial_loss > 0 else 0
-                logger.info(f"Overall improvement: {improvement:.1f}% ({initial_loss:.4f} → {final_loss:.4f})")
+            # Calculate average quantization MSE across all rounds
+            quantization_mses = [r.get('server_quantization_mse', 0) for r in results if 'server_quantization_mse' in r]
+            if quantization_mses:
+                avg_quantization_mse = sum(quantization_mses) / len(quantization_mses)
+                logger.info(f"Average Server Quantization MSE: {avg_quantization_mse:.6f}")
+                logger.info(f"Quantization MSE Range: [{min(quantization_mses):.6f}, {max(quantization_mses):.6f}]")
+            
+            # Log final quantization parameters from last round
+            if results and 'client_quantization_stats' in results[-1]:
+                client_stats = results[-1]['client_quantization_stats']
+                for i, stats in enumerate(client_stats):
+                    if stats.get('quantization_enabled', False):
+                        logger.info(f"Client {i} Final Quantization Scales:")
+                        logger.info(f"  Client->Server: scale={stats.get('client_to_server_scale', 'N/A'):.6f}")
+                        logger.info(f"  Server->Client: scale={stats.get('server_to_client_scale', 'N/A'):.6f}")
+            
+            logger.info("="*50)
+        
+        # Save final configuration for reproducibility
+        try:
+            config_save_path = f"logs/training/{args.experiment_name}_final_config.yaml"
+            config.to_yaml(config_save_path)
+            logger.info(f"Final configuration saved to {config_save_path}")
+        except Exception as e:
+            logger.warning(f"Could not save final configuration: {e}")
         
         return results
         
@@ -219,8 +282,31 @@ def main():
     except Exception as e:
         logger.error(f"Training failed with error: {e}")
         logger.error("For debugging, try running with:")
-        logger.error("  CUDA_LAUNCH_BLOCKING=1 python scripts/run_federated.py --device cpu")
+        logger.error("  CUDA_LAUNCH_BLOCKING=1 python scripts/run_quantized_federated.py --device cpu")
+        logger.error("  Or disable quantization with: --disable_quantization")
         raise
 
+def run_quantization_comparison():
+    """Standalone function to run quantization comparison"""
+    logger = logging.getLogger(__name__)
+    
+    logger.info("🔬 RUNNING QUANTIZATION COMPARISON EXPERIMENT")
+    logger.info("="*60)
+    
+    # Create base config
+    base_config = create_quantized_sample_config()
+    
+    # Initialize communication manager
+    comm_manager = QuantizedCommunicationManager(base_config)
+    
+    # Run comparison
+    results = comm_manager.compare_quantized_vs_standard('cuda')
+    
+    return results
+
 if __name__ == "__main__":
-    main()
+    # Check for special comparison mode
+    if len(sys.argv) > 1 and sys.argv[1] == "--compare":
+        run_quantization_comparison()
+    else:
+        main()
