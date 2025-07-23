@@ -210,3 +210,12 @@ class QuantizedCommunicationManager(CommunicationManager):
                 logger.info("⚠️  Quantization slightly reduces performance")
             else:
                 logger.info("🎉 Quantization improves performance!")
+            
+            # Additional comparison metrics
+            if 'server_quantization_mse' in results_quantized[-1]:
+                avg_quantization_mse = sum(r.get('server_quantization_mse', 0) for r in results_quantized) / len(results_quantized)
+                logger.info(f"Average Quantization MSE: {avg_quantization_mse:.6f}")
+        
+        logger.info("="*60)
+        
+        return results_comparison
